@@ -1,0 +1,249 @@
+//------------------------------------------------------------------------------------------------------------
+// Este es un ejemplo de FEM + DDM 
+// Nota: Usaremo el programa de Gielis cargando las propiedades del medio en un ".txt"
+//------------------------------------------------------------------------------------------------------------
+
+int error=0;int title;
+
+/*-----------------------------------
+Files handling
+-----------------------------------*/
+
+func ifstream skipcomment(ifstream &ff, bool showcomment){
+    while(1){
+        int where = ff.tellg(); //store file position
+        string comment;
+        ff >> comment;
+        if (!ff.good()) break;
+        if (comment(0:1)=="//"){
+            getline(ff, comment);
+			if(showcomment) cout << " -- //" << comment << endl;
+        }
+        else{
+            ff.seekg(where); //restore file position
+            break;
+        }
+    }
+    return ff;
+}
+
+func ifstream skipcomment(ifstream &ff){
+	return skipcomment(ff, true);
+}
+
+/*
+real f = 100;
+{
+	ofstream file("f.txt", binary);
+    file.precision(16);
+    file << f << endl;
+	file.flush; //to flush the buffer of file
+} 
+*/
+
+func real[int] loadvars(string ff, int nvars, string varnames, bool showcomment){
+	real[int] varsvalues(nvars);
+	ifstream file(ff, binary);
+	int varcount=nvars;
+	while(varcount>0){
+		string variable;
+		int length;
+		string name;
+		real xx;
+		if(showcomment){
+			skipcomment(file) >> variable;
+		}else{
+			skipcomment(file,false) >> variable;
+		}
+		length=variable.find(";")-1;
+		name=variable(0:variable.find("=")-1);
+		xx=atof(variable(variable.find("=")+1:length));
+		
+		
+		if(showcomment){
+			cout << "variable leida: " << name << endl;
+			cout << "con un valor de " << xx << endl ;
+		}
+		
+		string pvar=varnames;
+		for (int i;i<nvars;i++){
+			int first=pvar.find(";");
+			string ivar=pvar(0:first-1);
+			if (name==ivar){
+				varsvalues(i)=xx;
+				varcount--;
+			}
+			pvar=pvar(first+1:pvar.length);
+		}
+	
+		if (varcount==0) {
+			cout << "todas las variables fueron cargadas" << endl << varsvalues << endl << endl;
+		}
+	}
+	return varsvalues;
+}
+
+func real[int] loadvars(string ff, int nvars, string varnames){
+	return loadvars(ff,nvars,varnames,true);
+}
+
+func real[int] loadvector(string ff, string vecname){
+	int nvars=1;
+	ifstream file(ff, binary);
+	string value=" ";
+	bool found=false;
+	while(found==false){
+		string variable;
+		string name;
+		int start;
+		int finish;
+		skipcomment(file) >> variable;
+		name=variable(0:variable.find("=")-1);
+		cout << "variable leida: " << name << endl;
+		
+		// cout << varcount <<" ";;
+		if(name==vecname){
+			finish=variable.find("]")-1;
+			start=variable.find("[")+1;
+			value=variable(start:finish);
+			for(int i=0;i<value.length;i++){
+				if(value(i:i)==",") nvars++;
+			}
+			found=true;
+		}
+	}
+	real[int] vecvalue(nvars);
+	for (int i;i<nvars;i++){
+		int first=value.find(",");
+		vecvalue(i)=atof(value(0:first-1));
+		value=value(first+1:value.length);
+	}
+	cout << "el vector fue cargado" << endl << vecvalue << endl << endl;
+	return vecvalue;
+}
+
+/*-----------------------------------
+¡Por fin! Donde inicia el programa
+-----------------------------------*/
+
+bool reset = true;
+
+int ModelN=1;
+
+string stMod="I"; //Modelo de agregación I(ModelN=1) o II(ModelN=2)
+string shapename="AA"; //esfera-esfera
+
+string temp="lambda;"; 
+real[int] lambda=loadvars("main-input.txt",1,temp);
+string name="GIELIS-s"+shapename+"-"+stMod+"("+lambda(0)+").csv";
+
+
+temp="agregations"; real[int] Agg=loadvector("main-input.txt",temp);
+cout << endl << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Agg=" << Agg << endl ;
+temp="Biots"; real[int] Biots=loadvector("main-input.txt",temp);
+cout << endl << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Biot=" << Biots << endl ;
+temp="Phis"; real[int] cons=loadvector("main-input.txt",temp);
+cout << endl << "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Phi=" << cons << endl ;
+temp="shape1"; real[int] shape1=loadvector("main-input.txt",temp);
+temp="shape2"; real[int] shape2=loadvector("main-input.txt",temp);
+real A0=Agg(0);real A1=Agg(1);real As=Agg(2);real At=(A1-A0)/As; int NAlpha=At+1; //real[int] Alpha= [0.01,0.03,...,0.99];
+int Nphi=cons.n;  //real[int] cons = [0.2,0.3,0.4,0.5,0.55,0.6,0.65,0.66,0.67,0.68,0.69,0.7,0.71,0.72,0.73,0.74]; // concentración total de las inclusiones
+int NBiot=Biots.n;//real[int] Biots = [1e-5,1e-2,1e-1,1,1e+1,1e+6];  // números de Biot
+int Nshape=(shape1.n==shape2.n)?shape1.n:-1;//Debería ser 8
+string strBiot  ="[" + Biots(0) ; for(int i=1;i<NBiot;i++)  strBiot   = strBiot   + "," + Biots(i) ; strBiot   = strBiot   + "]"; //"[1e-5,1e-2,1e-1,1,1e+1,1e+6]";
+string strShape1="[" + shape1(0); for(int i=1;i<Nshape;i++) strShape1 = strShape1 + "," + shape1(i); strShape1 = strShape1 + "]"; //"[1,1,4,4,2,2,2,0]";
+string strShape2="[" + shape2(0); for(int i=1;i<Nshape;i++) strShape2 = strShape2 + "," + shape2(i); strShape2 = strShape2 + "]"; //"[1,1,4,4,2,2,2,0]";
+
+for (int A=0; A < NAlpha; A++){
+real agregation=A0+A*As;
+
+cout << endl << endl << "Round " << A << ", aggregation = " << agregation << "." << endl << endl;
+
+for (int KK = 0; KK < Nphi; KK++)
+{
+real Phi=cons[KK];
+real phiNano,phiMeso;
+if (ModelN==1){
+	phiMeso=agregation*Phi;
+	phiNano=(Phi-phiMeso)/(1-phiMeso);
+	// phiNano=(Phi-phiMeso); //versión "rectificada" que parece funcionar mejor
+} 
+else if (ModelN==2){
+	phiMeso=1.0+agregation*(Phi-1.0);
+	phiNano=(Phi)/(phiMeso);
+} else {
+	cout << "ERROR: Modelo no reconocido" <<endl;
+	error=1;
+	assert(false);
+}
+
+real[int] gammaM=[1,1]; real[int] gammaI=[lambda(0),lambda(0)]; //Diagonal del tensor de conductividad de la matriz y la inclusión
+
+{
+ofstream ff("input.txt");
+ff << "// Conductivities" << endl;
+ff << "k_mat1=" << gammaM(0) << ";" << endl;
+ff << "k_mat2=" << gammaM(1) << ";" << endl;
+ff << "k_inc1=" << gammaI(0) << ";" << endl;
+ff << "k_inc2=" << gammaI(1) << ";" << endl;
+ff << "// Concentration" << endl;
+ff << "phi=" << phiNano << ";" << endl;
+ff << "// Biot number" << endl;
+ff << "Bi=" << strBiot << endl;
+ff << "// Forma" << endl;
+ff << "shape=" << strShape1 << endl;
+}
+
+	title = exec("title agg="+agregation+",phi="+Phi+",1raEscala");
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+cout << "\n\nRealizando calculos para la primera escala microscopica" << endl;
+int nano = exec("FreeFem++ gielis-simple-1phi.edp -v 0 -name "+name+" -sepoutput"+(reset?" -resetoutput":" "));
+// cout << "Presiona [Enter] para continuar" << endl;
+// cin.ignore();
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+	title = exec("title agg="+agregation+",phi="+Phi+",2daEscala");
+for (int kk = 0; kk < NBiot; kk++)
+{
+real Biot=Biots[kk];
+
+int nvars=3; string varnames="k1;k2;Bi;"; //Es importante separarlas y terminar con ";"
+real[int] phiNew=loadvars("result"+(kk+1)+".txt",nvars,varnames);
+if(phiNew(2)!=Biot){
+	cout << endl << endl << "---Fatal error: The loaded file does not coincide with the needed Biot number.---" << endl << endl;
+	exit;
+}
+
+if (ModelN==1){
+	gammaM=[phiNew(0),phiNew(1)];gammaI=gammaI;
+} 
+else if (ModelN==2){
+	gammaI=[phiNew(0),phiNew(1)];gammaM=gammaM;
+}
+{
+ofstream ff("input.txt");
+ff << "// Conductivities" << endl;
+ff << "k_mat1=" << gammaM(0) << ";" << endl;
+ff << "k_mat2=" << gammaM(1) << ";" << endl;
+ff << "k_inc1=" << gammaI(0) << ";" << endl;
+ff << "k_inc2=" << gammaI(1) << ";" << endl;
+ff << "// Concentration" << endl;
+ff << "phi=" << phiMeso << ";" << endl;
+ff << "// Biot numbers" << endl;
+ff << "Bi=" << Biot << ";" << endl;
+ff << "// Forma" << endl;
+ff << "shape=" << strShape2 << endl;
+}
+
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+cout << "Realizando calculos para la segunda escala microscopica" << endl;
+string add="shape-AA(circ);"+agregation+";"+Phi;
+int meso = exec("FreeFem++ gielis-simple-1phi.edp -v 0 -name "+name+" -comment "+add);
+// %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+reset = false;
+}
+
+cout << endl << "Prease replace phi with the correct value of " << Phi << "..." << endl << endl;
+}
+}

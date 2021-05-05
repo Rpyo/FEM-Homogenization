@@ -1,0 +1,12 @@
+// Running time parameters
+lambda=500;
+agregations=[0.01,0.99,0.02] //<from,to,step>
+Biots=[1e-5]	
+Phis=[0.2,0.3,0.4,0.5,0.55,0.6,0.65,0.7,0.71,0.72,0.73,0.74]
+// Formas disponibles:
+// [1,1,4,4,2,2,2,0]; //- (circunferencias) - A
+// [1,1,8,8,0.5,0.5,8,0]; //- (como una flor) - B
+// [1,1,4,4,100,100,100,0]; //- (cuadrado) - C
+// [1,1,4,4,1,1,1,0]; //- (rombo) - D
+shape1=[1,1,4,4,2,2,2,0]
+shape2=[1,1,4,4,2,2,2,0]
