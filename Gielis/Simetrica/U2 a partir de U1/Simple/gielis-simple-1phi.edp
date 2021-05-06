@@ -1,0 +1,543 @@
+//------------------------------------------------------------------------------------------------------------
+// Gielis EDP
+// Este es un ejemplo de FEM + DDM (Mesh generated with Geilis formula)
+// We will use the "superformula" by Gielis (2003), to draw a wide range of figures
+//------------------------------------------------------------------------------------------------------------
+// load "gsl"
+
+/*-----------------------------------
+Files handling
+-----------------------------------*/
+
+func ifstream skipcomment(ifstream &ff){
+    while(1){
+        int where = ff.tellg(); //store file position
+        string comment;
+        ff >> comment;
+        if (!ff.good()) break;
+        if (comment(0:1)=="//"){
+            getline(ff, comment);
+            cout << " -- //" << comment << endl;
+        }
+        else{
+            ff.seekg(where); //restore file position
+            break;
+        }
+    }
+    return ff;
+}
+
+/*
+real f = 100;
+{
+	ofstream file("f.txt", binary);
+    file.precision(16);
+    file << f << endl;
+	file.flush; //to flush the buffer of file
+} 
+*/
+
+func real[int] loadvars(string ff, int nvars, string varnames){
+	real[int] varsvalues(nvars);
+	ifstream file(ff, binary);
+	int varcount=nvars;
+	while(varcount>0){
+		string variable;
+		int length;
+		string name;
+		real xx;
+		skipcomment(file) >> variable;
+		length=variable.find(";")-1;
+		name=variable(0:variable.find("=")-1);
+		xx=atof(variable(variable.find("=")+1:length));
+		
+		
+		// cout << varcount <<" ";
+		cout << "variable leida: " << name << endl;
+		cout << "con un valor de " << xx << endl ;
+		
+		string pvar=varnames;
+		for (int i;i<nvars;i++){
+			int first=pvar.find(";");
+			string ivar=pvar(0:first-1);
+			if (name==ivar){
+				varsvalues(i)=xx;
+				varcount--;
+			}
+			pvar=pvar(first+1:pvar.length);
+		}
+	
+		if (varcount==0) {
+			cout << "todas las variables fueron cargadas" << endl << varsvalues << endl << endl;
+		}
+	}
+	return varsvalues;
+}
+
+func real[int] loadvector(string ff, string vecname){
+	int nvars=1;
+	ifstream file(ff, binary);
+	string value=" ";
+	bool found=false;
+	while(found==false){
+		string variable;
+		string name;
+		int start;
+		int finish;
+		skipcomment(file) >> variable;
+		name=variable(0:variable.find("=")-1);
+		variable=variable(variable.find("=")+1:-1);
+		cout << "variable leida: " << name << endl;
+		
+		// cout << varcount <<" ";;
+		if(name==vecname){
+			finish=variable.find("]");
+			start=variable.find("[");
+			if (finish==-1 && start==-1){
+				int length=variable.find(";")-1;
+				value=variable(0:length);
+			}
+			else {
+				finish=finish-1;
+				start=start+1;			
+				value=variable(start:finish);
+				for(int i=0;i<value.length;i++){
+					if(value(i:i)==",") nvars++;
+				}
+			}
+			found=true;
+		}
+	}
+	real[int] vecvalue(nvars);
+	for (int i;i<nvars;i++){
+		int comma=value.find(",");
+		vecvalue(i)=atof(value(0:comma-1));
+		value=value(comma+1:value.length);
+	}
+	cout << "el vector fue cargado" << endl << vecvalue << endl << endl;
+	return vecvalue;
+}
+
+/*----------------------------------- 
+Parametros control de la ejecución
+-----------------------------------*/
+
+verbosity = 0; // Evita comentarios del sistema salvo que de errores serios
+
+real tol = 1e-5;
+int maxstep = 500;
+// ---------- For optimisation purpose only ---------- //
+int nLowest = 22;                                         //
+real LowestConsLimit = 0.1;                               //
+int nLow = 25;                                         //
+real LowConsLimit = 0.3;                               //
+int nMean = 35;                                        //
+real HighConsLimit = 0.5;                              //
+int nHigh = 50;                                                    //
+real HighestConsLimit = 0.71;                              //
+int nHighest = 82;                                        //
+// ---------- For optimisation purpose only ---------- //
+
+string name="GIELIS-s ok";
+string ext=".csv";//".csv" for CSV-Table or ".tex" for TeX/LaTeX
+string comentary=" ";
+bool resetoutput = false;
+bool showsolutions = false;
+// bool comparecircles = true;
+bool showeachstep = false;
+int Bstep=0;
+bool separateout= false;
+for(int i=1;i<ARGV.n;++i)
+{
+       if(ARGV[i]=="-resetoutput") resetoutput = true;
+	   if(ARGV[i]=="-showsolutions") showsolutions = true;
+	   if(ARGV[i]=="-showeachstep") showeachstep = true;
+	   if(ARGV[i]=="-comment") comentary=ARGV[i+1];
+	   if(ARGV[i]=="-sepoutput") separateout=true; //Bstep=atoi(ARGV[i+1]);
+	   if(ARGV[i]=="-name"){
+		   string NameExt=ARGV[i+1];
+		   int point=NameExt.find(".");
+		   name=NameExt(0:point-1);
+		   if (NameExt(point:NameExt.length)==".tex")
+			   ext=".tex";
+	   }
+}
+
+int figurecount=1;
+
+string sep="-";
+string endline="el";
+if (ext==".tex"){
+	sep="&";
+	endline="\\\\ \n";
+}
+if (ext==".csv"){
+	sep=";";
+	endline="\n";
+}
+if(resetoutput) 
+{ 
+	ofstream file("resultados-"+name+ext);
+	file << "Biot"<< sep <<"phi"<< sep 
+	<<"k11"<< sep <<"k12"<< sep 
+	<<"k21"<< sep <<"k22"<< sep 
+	<<"Hasselman-Lloid"<< sep << "Comments"<< endline;
+}
+//cout << "sep=" << sep <<"; endl=" <<endline;
+
+// ---------------------------------------------------------------------------
+// Definición de las direcciones para crear las mallas
+// ---------------------------------------------------------------------------
+
+// Labels:
+int fenorte=1;int feeste=2;int fesur=3;int feoeste=4;
+
+
+/*-----------------------------------
+Datos de entrada (propiedades y
+geometría de los materiales constituyentes)
+-----------------------------------*/
+
+int nvars=5; string varnames="k_mat1;k_mat2;k_inc1;k_inc2;phi;"; //Es importante separarlas y terminar con ";"
+real[int] properties=loadvars("input.txt",nvars,varnames);
+
+string vecname="Bi";
+real[int] Biot=loadvector("input.txt",vecname);
+int NBiot=Biot.n;
+
+real[int] gammaM=[properties(0),properties(1)]; //Diagonal del tensor de conductividad de la matriz
+real[int] gammaI=[properties(2),properties(3)]; //Diagonal del tensor de conductividad de la inclusión
+
+// int NBiot=6; real[int] Biot= [1e-5,1e-2,1e-1,1,10,1e+6];// números de Biot
+real phi=properties(4);
+//int Nphi=5; real[int] cons = [0.2,0.3,0.4,0.48,0.5]; // concentración total de las inclusiones
+
+// ---------------------------------------------------------------------------
+// Solución analítica conocida
+// ---------------------------------------------------------------------------					
+
+func real HasselmanLloid(real gM, real gI, real beta, real Vol)
+{
+	real ratio=gI/gM;
+	// real Vol = pi*(a/2)^2;
+	real ratim=gI/(beta);
+	real numerador=gM*((ratio-1-ratim)*Vol+(1+ratim+ratio));
+	real denominador=(1+ratim-ratio)*Vol+(1+ratim+ratio);
+	return numerador/denominador;
+}
+
+/* Geometria y malla */
+
+// Parametros de la curva del contacto: 2 de proporcionalidad, 2 de período, 3 de potencias
+vecname="shape";
+real[int] param(8); param =loadvector("input.txt",vecname);
+// [1,1,4,4,2,2,2,0]; //- (circunferencias) - A
+// [1,1,8,8,0.5,0.5,8,0]; //- (como una flor) - B
+// [1,1,4,4,100,100,100,0]; //- (cuadrado) - C
+// [1,1,4,4,1,1,1,0]; //- (rombo) - D
+
+if (comentary==" ")
+	for (int i=0;i<8;i++)
+		 comentary = comentary + param(i) + " ";
+
+border A(t = 0,1){x = t - 0.5; y = -0.5; label = fenorte;};            // frontera Sur del cuadrado
+border B(t = 0,1){x = 0.5; y = t - 0.5; label = feeste;};             // frontera Este del cuadrado
+border C(t = 0,1){x = 0.5 - t; y = 0.5; label = fesur;};             // frontera Norte del cuadrado
+border D(t = 0,1){x = -0.5; y = 0.5 - t; label = feoeste;};            // frontera Oeste del cuadrado
+
+func real R(real t,real[int] param) 
+{
+//if(sizeof(param)/sizeof(param[0])==5) { param=[param[0],param[1],param[2],param[2],param[3],param[3],param[3],0,param[4]); }
+real xaux=abs( cos(param[2]*t/4) / param[0] );
+//real xaux=abs( cos(t) );
+real yaux=abs( sin(param[3]*t/4) / param[1] );
+//real yaux=abs( sin(t) );
+return abs( xaux^param[5] + yaux^param[6] )^(-1/param[4]);
+}
+
+border Gi(t=0,2*pi)
+{
+	x = (R(t,param)* cos(t)); 
+	y = (R(t,param)* sin(t));
+	label = 0;
+}
+
+/* Aquí comienzan los cíclos de cálculo */
+
+//for (int KK = 0; KK < Nphi; KK++)
+//{
+//real phi = cons[KK];
+
+/* Discretización */
+int nl;                 // número de puntos en frontera  (rectángulo)
+
+
+
+// ---------- For optimisation purpose only ---------- //
+if (phi<LowestConsLimit){                              //
+	nl=nLowest;                                        //
+}else{                                                 //
+	if (phi<LowConsLimit){                             //
+		nl=nLow;                                       //
+	}else{                                             //
+		if (phi>HighConsLimit){                        //
+			if (phi>HighestConsLimit){                 //
+				nl=nHighest;                           //
+			}else{                                     //
+				nl=nHigh;                              //
+			}                                          //
+		}else{                                         //
+			nl=nMean;                                  //
+		}                                              //
+	}                                                  //
+}                                                      //
+// ---------- For optimisation purpose only ---------- //
+
+real deltaH = 1.0/nl;
+int nc=floor((4*pi)/deltaH);; //Discretizacion del contacto (lo saque de Mesejo, tendría que calcular)
+
+/* Creacion de la malla  ¡Al fin! */
+mesh ThI=buildmesh(Gi(nc));
+fespace Vh(ThI,P0); 
+real areaG=int2d(ThI)(1);//cout << "area (original) =" << areaG <<"\n";
+
+
+real sizeparam = sqrt(phi/areaG); 
+cout << "escala =" << sizeparam <<"\n";
+
+real diammed = 2*sizeparam*(param[0]^2+param[1]^2)^(1/2); 
+cout << "diametro =" << diammed <<"\n";
+
+border Contacto(t=0,2*pi)
+{
+	x = sizeparam*(R(t,param)* cos(t)*cos(param[7])-R(t,param)* sin(t)*sin(param[7])); 
+	y = sizeparam*(R(t,param)* sin(t)*cos(param[7])+R(t,param)* cos(t)*sin(param[7]));
+	label = 0;  //PONERLE AQUÍ 0 ES IMPORTANTE, AUNQUE NO SÉ TODAVÍA POR QUÉ
+}
+ThI=buildmesh(Contacto(nc));
+
+mesh ThM = buildmesh(A(nl) + B(nl) + C(nl) + D(nl)+Contacto(-nc));
+
+mesh ThU = ThM + ThI;
+if(showsolutions)
+{
+	plot(ThU, wait = 1,cmm="Mesh generated with "+name+" formula", ps=name+"-f"+figurecount+"-malla.eps");figurecount++;
+}
+
+real area = int2d(ThI)(1);
+cout << "Concentration=" << area << endl; //chequea que "phi=area"
+
+// ---------------------------------------------------------------------------
+// Aquí se crea la matriz con las propiedades de los materiales constituyentes 
+// ---------------------------------------------------------------------------
+real[int,int] Km = [[gammaM[0], 0.0],
+                    [0.0, gammaM[1]]];     // tensor de conductividad de la matriz
+real[int,int] Ki = [[gammaI[0], 0.0],
+                    [0.0, gammaI[1]]];	  // tensor de conductividad de la inclusión
+
+// ---------------------------------------------------------------------------
+// Definiendo los "macros" que se usaran dentro de los problemas
+// ---------------------------------------------------------------------------	
+macro Kuv(K,u,v) ((K(0,0)*dx(u) + K(0,1)*dy(u))*dx(v) + (K(1,0)*dx(u) + K(1,1)*dy(u))*dy(v)) // EOM
+macro Kv1(K,v) (K(0,0)*dx(v) + K(1,0)*dy(v))                                                 // EOM
+macro Kv2(K,v) (K(0,1)*dx(v) + K(1,1)*dy(v))                                                 // EOM
+macro KmN(u) ((Km(0,0)*dx(u) + Km(0,1)*dy(u))*N.x + (Km(1,0)*dx(u) + Km(1,1)*dy(u))*N.y) // EOM
+macro KiN(u) ((Ki(0,0)*dx(u) + Ki(0,1)*dy(u))*N.x + (Ki(1,0)*dx(u) + Ki(1,1)*dy(u))*N.y) // EOM
+
+/*----------------------------------- 
+Definir el tipo de elementos finitos (espacio) con los que voy a trabajar 
+----------------------------------- */
+
+func perio = [[fenorte,x], [fesur,x], [feeste,y], [feoeste,y]];
+
+fespace FMh(ThM, P2, periodic = perio);
+fespace FIh(ThI, P2);
+
+
+// ---------------------------------------------------------------------------
+// Calcular los valores iniciales sin condición de contacto
+// ---------------------------------------------------------------------------
+
+fespace FTh(ThU, P2, periodic = perio);
+
+FTh indIb = chi(ThI)(x,y);//chi(...) es la Función indicadora
+FTh indMb = chi(ThM)(x,y);//chi(...) es la Función indicadora
+FTh indb = indIb*indMb;
+FTh indI = indIb-indb;
+FTh indM = indMb-indb;
+
+// plot(indb, wait=1, fill=1, value = 1, dim = 3);
+
+FTh u1, v1, u2, v2;
+
+problem CellProblem1(u1, v1) = 
+		int2d(ThU)(indM*Kuv(Km,u1,v1) + indI*Kuv(Ki,u1,v1))
+		// int2d(ThM)(indM*Kuv(Km,u1,v1) + indI*Kuv(Ki,u1,v1))
+	  // + int2d(ThI)(indM*Kuv(Km,u1,v1) + indI*Kuv(Ki,u1,v1))
+	  + int2d(ThU)(indM*Kv1(Km,v1) + indI*Kv1(Ki,v1));
+
+problem CellProblem2(u2, v2) = 
+		int2d(ThU)(indM*Kuv(Km,u2,v2) + indI*Kuv(Ki,u2,v2))
+	  + int2d(ThU)(indM*Kv2(Km,v2) + indI*Kv2(Ki,v2));
+	  
+CellProblem1;
+CellProblem2;
+
+for (int kk = 0; kk < NBiot; kk++){
+	real Bi     = Biot[kk];      // numero de Biot
+	real beta   = ((Bi)*gammaM[0])/(diammed);  
+	real lambda = 2*beta;
+	cout << "Bi = " << Bi << endl;
+						
+	// ---------------------------------------------------------------------------
+	// Ecuación variacional y solucion problema contacto IMPERFECTO mediante DD
+	// ---------------------------------------------------------------------------
+
+	FMh u1m, v1m, u2m, v2m, u10m, u20m;
+	FIh u1i, v1i, u2i, v2i, u10i, u20i;
+
+	int i = 0;
+	// u10m  = 0.0;//Comentado en MESEJO OK
+	// u10i  = 0.0;//Comentado en MESEJO OK
+	u10i = indIb*u1;
+	// u20m  = 0.0;//Comentado en MESEJO OK
+	// u20i  = 0.0;//Comentado en MESEJO OK
+	u20i = indIb*u2;
+
+	problem CellPM1(u1m, v1m, init = i, solver = GMRES, eps=5e-5) =
+		int2d(ThM)(Kuv(Km,u1m,v1m))
+	  + int2d(ThM)(Kv1(Km,v1m))
+	  // + int1d(ThM,0)(beta*v1m*u10m)  //Regularizado
+	  // - int1d(ThM,0)((lambda - beta)*v1m*u10i)  //Regularizado
+	  // + int1d(ThM,0)(lambda*v1m*u1m);  //Regularizado
+	  - int1d(ThM,0)(beta*v1m*u10i)  //Sin regularizar
+	  + int1d(ThM,0)(beta*v1m*u1m);  //Sin regularizar
+		  
+	problem CellPI1(u1i, v1i, init = i, solver = GMRES, eps=5e-5) =
+		int2d(ThI)(Kuv(Ki,u1i,v1i))
+	  + int2d(ThI)(Kv1(Ki,v1i))
+	  // - int1d(ThI,0)((lambda - beta)*v1i*u1m)  //Regularizado
+	  // - int1d(ThI,0)((beta - lambda)*v1i*u1i);  //Regularizado
+	  + int1d(ThI,0)(beta*v1i*u1i)  //Sin regularizar
+	  - int1d(ThI,0)(beta*v1i*u1m); //Sin regularizar
+	                          //Modificado de acuerdo a MESEJO OK
+		  
+	problem CellPM2(u2m, v2m, init = i, solver = GMRES, eps=5e-5) =
+	    int2d(ThM)(Kuv(Km,u2m,v2m))
+	  + int2d(ThM)(Kv2(Km,v2m))
+	  // - int1d(ThM,0)(beta*v2m*u20m)  //Regularizado
+	  // - int1d(ThM,0)((lambda - beta)*v2m*u20i)  //Regularizado
+	  // + int1d(ThM,0)(lambda*v2m*u2m);  //Regularizado
+	  - int1d(ThM,0)(beta*v2m*u20i)  //Sin regularizar
+	  + int1d(ThM,0)(beta*v2m*u2m);  //Sin regularizar
+		  
+	problem CellPI2(u2i, v2i, init = i, solver = GMRES, eps=5e-5) =
+	    int2d(ThI)(Kuv(Ki,u2i,v2i))
+	  + int2d(ThI)(Kv2(Ki,v2i))
+	  // - int1d(ThI,0)((lambda - beta)*v2i*u2m)  //Regularizado
+	  // - int1d(ThI,0)((beta - lambda)*v2i*u2i);  //Regularizado
+	  + int1d(ThI,0)(beta*v2i*u2i)  //Sin regularizar
+	  - int1d(ThI,0)(beta*v2i*u2m); //Sin regularizar
+	                          //Modificado de acuerdo a MESEJO OK
+		  
+	// ---------------------------------------------------------------------------
+	// Integral en la frontera para condición de parada
+	// ---------------------------------------------------------------------------
+
+	func real iterP1()
+	{
+		CellPM1; 
+		CellPI1; 
+		real err = 0.5*int1d(ThI)((u10i - u1i)*(u10i - u1i));
+		// err += 0.5*int1d(ThM)((u10m - u1m)*(u10m - u1m));//Comentado en MESEJO OK
+		// u10m = u1m;//Comentado en MESEJO OK
+		u10i = u1i;
+		// real err = int1d(ThM,0)(KmN(u1m) - beta*(u1m - u1i));
+		return err;
+	}
+
+	func real iterP2()
+	{
+		 u2m=u1m(y,x); 
+		 v2m=v1m(y,x); 
+		u20m=u10m(y,x); 
+		 u2i=u1i(y,x); 
+		 v2i=v1i(y,x); 
+		u20i=u10i(y,x); 
+		real err = 0.5*int1d(ThI)((u20i - u2i)*(u20i - u2i));
+		// err += 0.5*int1d(ThM)((u20m - u2m)*(u20m - u2m));//Comentado en MESEJO OK
+		// u20m = u2m;//Comentado en MESEJO OK
+		u20i = u2i;
+		// real err = int1d(ThM,0)(KmN(u2m) - beta*(u2m - u2i));
+		return err;
+	}
+
+	real rerror = 1.0;
+	while(rerror > tol)
+	{
+		rerror = abs(iterP1());
+		i++;
+		if(showeachstep)
+		{
+		cout << "# de paso (P1): " << i << ", error = " << rerror << endl;
+		}
+		// if (i > 150) break;
+	}
+	if(showeachstep==false)
+	{
+	cout << "# de pasos (P1): " << i << ", error = " << rerror << endl;
+	}
+
+	rerror = 1.0;
+	i = 0;
+	while(rerror > tol)
+	{
+		rerror = abs(iterP2());
+		i++;
+		if(showeachstep)
+		{
+		cout << "# de paso (P2): " << i << ", error = " << rerror << endl;
+		}
+		// if (i > 150) break;
+	}
+	if(showeachstep==false)
+	{
+	cout << "# de pasos (P2): " << i << ", error = " << rerror << endl;
+	}
+
+if(showsolutions)
+{
+	plot(u1m, u1i, fill = 1, value = 1, dim = 3, wait = 0,cmm="Solution in the x direction (Bi="+Bi+")", ps=name+"-f"+figurecount+"-sol.eps");figurecount++;
+	plot(u2m, u2i, fill = 1, value = 1, dim = 3, wait = 0,cmm="Solution in the y direction (Bi="+Bi+")", ps=name+"-f"+figurecount+"-sol.eps");figurecount++;
+}
+
+	/* Coeficientes effectivos */
+
+	real k11ef, k12ef, k21ef, k22ef;
+
+	k11ef = int2d(ThM)(Km(0,0)*(dx(u1m) + 1.0) + Km(0,1)*dy(u1m)) + int2d(ThI)(Ki(0,0)*(dx(u1i) + 1.0) + Ki(0,1)*dy(u1i));
+	k12ef = int2d(ThM)(Km(0,0)*dx(u2m) + Km(0,1)*(dy(u2m) + 1.0)) + int2d(ThI)(Ki(0,0)*dx(u2i) + Ki(0,1)*(dy(u2i) + 1.0));
+	k21ef = int2d(ThM)(Km(1,0)*(dx(u1m) + 1.0) + Km(1,1)*dy(u1m)) + int2d(ThI)(Ki(1,0)*(dx(u1i) + 1.0) + Ki(1,1)*dy(u1i));
+	k22ef = int2d(ThM)(Km(1,0)*dx(u2m) + Km(1,1)*(dy(u2m) + 1.0)) + int2d(ThI)(Ki(1,0)*dx(u2i) + Ki(1,1)*(dy(u2i) + 1.0));
+	
+	real HL=HasselmanLloid(Km(0,0), Ki(0,0), Bi, phi);//estaba evaluado en beta
+						
+	cout.scientific << "K = |" << k11ef << "  " << k12ef << "|" << endline;
+	cout.scientific << "    |" << k21ef << "  " << k22ef << "|" << endline << endline;
+	if(separateout){
+		ofstream ff("result"+(kk+1)+".txt");
+		ff << "// Conductividad" << endl;
+		ff << "k1=" << k11ef << ";" << endl;
+		ff << "k2=" << k22ef << ";" << endl;
+		ff << "// Biot number" << endl;
+		ff << "Bi=" << Bi << ";" << endl;
+	}else{	
+		ofstream file("resultados-"+name+ext,append);
+		file << Bi << sep << area << sep 
+			<< k11ef << sep << k12ef << sep 
+			<< k21ef << sep << k22ef << sep 
+			<< HL << sep << comentary << endl; 
+	}
+}
+
+//}
